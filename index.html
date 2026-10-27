@@ -325,31 +325,49 @@ function loop(t){
 }
 
 const px=e=>{const r=canvas.getBoundingClientRect();return (e.clientX-r.left)/r.width*W;};
-// iOS file previews and older Safari may not deliver Pointer Events reliably.
-let touchActive=false, lastTouchAt=0;
+// Drag to aim, release to drop. Touch events are used for iOS Safari.
+let activeTouchId=null, lastTouchAt=0, pointerDown=false;
 function coord(clientX){const r=canvas.getBoundingClientRect();return (clientX-r.left)/Math.max(1,r.width)*W;}
-canvas.addEventListener('touchstart',e=>{e.preventDefault();touchActive=true;lastTouchAt=Date.now();ac();aimX=coord(e.changedTouches[0].clientX);},{passive:false});
-canvas.addEventListener('touchmove',e=>{e.preventDefault();aimX=coord(e.changedTouches[0].clientX);},{passive:false});
-canvas.addEventListener('touchend',e=>{if(e.cancelable)e.preventDefault();touchActive=false;lastTouchAt=Date.now();},{passive:false});
-canvas.addEventListener('touchcancel',e=>{touchActive=false;},{passive:false});
-
-// Tap-to-drop fallback for mobile browsers: trigger on touchstart rather than
-// relying on touchend, which some iOS document previews swallow.
+function touchById(list,id){for(const t of list)if(t.identifier===id)return t;return null;}
 canvas.addEventListener('touchstart',e=>{
   if(e.cancelable)e.preventDefault();
-  const t=e.changedTouches[0]; if(!t)return;
-  ac(); aimX=coord(t.clientX); drop();
+  if(activeTouchId!==null)return;
+  const t=e.changedTouches[0];if(!t)return;
+  activeTouchId=t.identifier;lastTouchAt=Date.now();ac();aimX=coord(t.clientX);
 },{passive:false});
-// Some mobile browsers only synthesize click events for local HTML files.
+canvas.addEventListener('touchmove',e=>{
+  if(e.cancelable)e.preventDefault();
+  const t=touchById(e.changedTouches,activeTouchId);
+  if(t)aimX=coord(t.clientX);
+},{passive:false});
+canvas.addEventListener('touchend',e=>{
+  if(e.cancelable)e.preventDefault();
+  const t=touchById(e.changedTouches,activeTouchId);
+  if(!t)return;
+  aimX=coord(t.clientX);activeTouchId=null;lastTouchAt=Date.now();drop();
+},{passive:false});
+canvas.addEventListener('touchcancel',e=>{
+  if(e.cancelable)e.preventDefault();activeTouchId=null;lastTouchAt=Date.now();
+},{passive:false});
+canvas.addEventListener('pointerdown',e=>{
+  if(e.pointerType==='touch')return;
+  pointerDown=true;ac();aimX=px(e);
+  try{canvas.setPointerCapture(e.pointerId);}catch(_){}
+});
+canvas.addEventListener('pointermove',e=>{
+  if(e.pointerType==='touch')return;
+  if(pointerDown)aimX=px(e);
+});
+canvas.addEventListener('pointerup',e=>{
+  if(e.pointerType==='touch'||!pointerDown)return;
+  pointerDown=false;aimX=px(e);drop();
+});
+canvas.addEventListener('pointercancel',()=>{pointerDown=false;});
+// Fallback for desktop browsers without Pointer Events.
 canvas.addEventListener('click',e=>{
-  if(Date.now()-lastTouchAt<700)return;
-  if(e.detail===0)return;
+  if(window.PointerEvent||Date.now()-lastTouchAt<800||e.detail===0)return;
   aimX=coord(e.clientX);drop();
 });
-
-canvas.addEventListener('pointerdown',e=>{if(e.pointerType==='touch')return;ac();aimX=px(e);try{canvas.setPointerCapture(e.pointerId);}catch(_){} });
-canvas.addEventListener('pointermove',e=>{if(e.pointerType==='touch')return;aimX=px(e);});
-canvas.addEventListener('pointerup',e=>{if(e.pointerType==='touch'||Date.now()-lastTouchAt<700)return;aimX=px(e);drop();});
 
 window.addEventListener('keydown',e=>{
   if(paused) return;
