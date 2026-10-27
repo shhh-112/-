@@ -115,12 +115,52 @@ const sfxDrop=()=>tone(520,0.1,'sine',0.22,820);
 const sfxHit=v=>{const n=performance.now(); if(n-lastHit<80) return; lastHit=n;
   const f=620+Math.random()*320;
   tone(f,0.09,'sine',Math.min(0.16,v/3000),f*1.5);};
+// Decode the original 11 clips once. Web Audio plays immediately or skips;
+// it never queues delayed HTMLAudioElement.play() requests on iOS Safari.
+const mergeBuffers=Array(11).fill(null);
+let audioLoading=false, lastMergeSound=-Infinity;
+const playingMergeSounds=[];
+function primeMergeAudio(){
+  const ctx=ac();
+  if(!ctx||audioLoading)return;
+  audioLoading=true;
+  MERGE_AUDIO.forEach((uri,i)=>{
+    try{
+      const base64=uri.substring(uri.indexOf(',')+1);
+      const binary=atob(base64);
+      const bytes=new Uint8Array(binary.length);
+      for(let j=0;j<binary.length;j++)bytes[j]=binary.charCodeAt(j);
+      ctx.decodeAudioData(bytes.buffer).then(buffer=>{
+        mergeBuffers[i]=buffer;
+      }).catch(()=>{});
+    }catch(_){ }
+  });
+}
 function sfxMerge(lv){
-  if(muted) return;
-  const src=MERGE_AUDIO[Math.min(10,Math.max(0,lv))];
-  if(!src) return;
-  const sound=new Audio(src); sound.volume=0.9;
-  sound.play().catch(()=>{});
+  if(muted)return;
+  const ctx=AC;
+  if(!ctx||ctx.state!=='running')return;
+  const now=performance.now();
+  if(now-lastMergeSound<100)return;
+  const buffer=mergeBuffers[Math.min(10,Math.max(0,lv))];
+  if(!buffer)return; // Skip if still loading; never play late.
+  lastMergeSound=now;
+  // At most two overlapping sounds; stop the oldest rather than accumulating.
+  while(playingMergeSounds.length>=2){
+    const old=playingMergeSounds.shift();
+    try{old.stop();}catch(_){ }
+  }
+  const source=ctx.createBufferSource();
+  source.buffer=buffer;
+  const gain=ctx.createGain();gain.gain.value=0.75;
+  source.connect(gain);gain.connect(ctx.destination);
+  playingMergeSounds.push(source);
+  source.onended=()=>{
+    const idx=playingMergeSounds.indexOf(source);
+    if(idx>=0)playingMergeSounds.splice(idx,1);
+    try{source.disconnect();gain.disconnect();}catch(_){ }
+  };
+  source.start(0);
 }
 const sfxOver=()=>{tone(520,0.25,'sine',0.22,330);tone(392,0.25,'sine',0.2,247,0.2);tone(294,0.5,'sine',0.2,175,0.4);};
 
@@ -333,7 +373,7 @@ canvas.addEventListener('touchstart',e=>{
   if(e.cancelable)e.preventDefault();
   if(activeTouchId!==null)return;
   const t=e.changedTouches[0];if(!t)return;
-  activeTouchId=t.identifier;lastTouchAt=Date.now();ac();aimX=coord(t.clientX);
+  activeTouchId=t.identifier;lastTouchAt=Date.now();primeMergeAudio();aimX=coord(t.clientX);
 },{passive:false});
 canvas.addEventListener('touchmove',e=>{
   if(e.cancelable)e.preventDefault();
@@ -351,7 +391,7 @@ canvas.addEventListener('touchcancel',e=>{
 },{passive:false});
 canvas.addEventListener('pointerdown',e=>{
   if(e.pointerType==='touch')return;
-  pointerDown=true;ac();aimX=px(e);
+  pointerDown=true;primeMergeAudio();aimX=px(e);
   try{canvas.setPointerCapture(e.pointerId);}catch(_){}
 });
 canvas.addEventListener('pointermove',e=>{
@@ -370,6 +410,7 @@ canvas.addEventListener('click',e=>{
 });
 
 window.addEventListener('keydown',e=>{
+  primeMergeAudio();
   if(paused) return;
   if(e.key==='ArrowLeft') aimX-=14;
   else if(e.key==='ArrowRight') aimX+=14;
